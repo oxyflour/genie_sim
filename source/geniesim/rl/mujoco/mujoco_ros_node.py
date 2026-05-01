@@ -59,7 +59,12 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Header
 from tf2_msgs.msg import TFMessage
 
-from geniesim_rl_interfaces.srv import GetObjectPose, GetObjectAABB, ResetScene  # noqa: E402
+try:
+    from geniesim_rl_interfaces.srv import GetObjectPose, GetObjectAABB, ResetScene  # noqa: E402
+except ImportError:
+    GetObjectPose = None
+    GetObjectAABB = None
+    ResetScene = None
 
 # ---------------------------------------------------------------------------- #
 # Helper math utilities
@@ -300,7 +305,7 @@ class MuJoCoRosNode(Node):
             # Allow host user (differs from container uid 1234) to open SHM
             try:
                 os.chmod(f"/dev/shm/{_ctrl_name}", 0o666)
-            except PermissionError:
+            except OSError:
                 pass
 
             _S = self._ctrl_state_dim * 4
@@ -379,16 +384,25 @@ class MuJoCoRosNode(Node):
             QOS_BEST_EFFORT,
         )
 
-        # Services
-        self._srv_pose = self.create_service(
-            GetObjectPose, f"{ns}get_object_pose", self._handle_get_object_pose
-        )
-        self._srv_aabb = self.create_service(
-            GetObjectAABB, f"{ns}get_object_aabb", self._handle_get_object_aabb
-        )
-        self._srv_reset = self.create_service(
-            ResetScene, f"{ns}reset_scene", self._handle_reset_scene
-        )
+        # Services are optional in local/demo setups where the ROS interface
+        # package has not been built yet.
+        self._srv_pose = None
+        self._srv_aabb = None
+        self._srv_reset = None
+        if GetObjectPose is not None and GetObjectAABB is not None and ResetScene is not None:
+            self._srv_pose = self.create_service(
+                GetObjectPose, f"{ns}get_object_pose", self._handle_get_object_pose
+            )
+            self._srv_aabb = self.create_service(
+                GetObjectAABB, f"{ns}get_object_aabb", self._handle_get_object_aabb
+            )
+            self._srv_reset = self.create_service(
+                ResetScene, f"{ns}reset_scene", self._handle_reset_scene
+            )
+        else:
+            self.get_logger().warning(
+                "geniesim_rl_interfaces unavailable; pose/AABB/reset ROS services disabled."
+            )
 
         # Sim time state
         self._sim_time: float = 0.0
@@ -1518,7 +1532,12 @@ def main(argv=None):
         import os as _os
         _os.environ["ROS_DOMAIN_ID"] = str(args.ros_domain_id)
 
-    rclpy.init()
+    try:
+        already_initialised = rclpy.ok()
+    except Exception:
+        already_initialised = False
+    if not already_initialised:
+        rclpy.init()
     node = MuJoCoRosNode(args)
 
     executor = SingleThreadedExecutor()

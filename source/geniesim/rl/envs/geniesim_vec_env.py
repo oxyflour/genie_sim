@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from multiprocessing import shared_memory, resource_tracker as _rt
@@ -215,7 +216,7 @@ class GenieSimVectorEnv:
                 self._frame_shm = shared_memory.SharedMemory(
                     name=self.cfg.shm_name, create=False, size=_total
                 )
-                _rt.unregister(f"/{self.cfg.shm_name}", "shared_memory")
+                self._safe_unregister_shm(self.cfg.shm_name)
                 break
             except FileNotFoundError:
                 time.sleep(1.0)
@@ -253,7 +254,7 @@ class GenieSimVectorEnv:
                     time.sleep(1.0)
             if shm is None:
                 raise RuntimeError(f"Ctrl SHM '{name}' not available")
-            _rt.unregister(f"/{name}", "shared_memory")
+            self._safe_unregister_shm(name)
             self._ctrl_shms.append(shm)
             self._ctrl_counters.append(
                 np.ndarray((1,), dtype=np.uint32, buffer=shm.buf, offset=0)
@@ -369,6 +370,20 @@ class GenieSimVectorEnv:
         if self._step_info_poses is not None:
             self._step_info_poses[:] = 0.0
         print(f"[GenieSimVectorEnv] Step SHM created: {_step_shm_name(self.cfg.shm_name)}")
+
+    @staticmethod
+    def _safe_unregister_shm(name: str) -> None:
+        """Detach attached shared memory from resource_tracker when supported."""
+        if os.name == "nt":
+            return
+        candidates = [name]
+        candidates.insert(0, f"/{name}")
+        for tracked_name in candidates:
+            try:
+                _rt.unregister(tracked_name, "shared_memory")
+                return
+            except Exception:
+                continue
 
     def _trigger_mujoco_step(self):
         for phase_buf in self._ctrl_mj_phases:
